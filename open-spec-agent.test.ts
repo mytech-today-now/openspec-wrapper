@@ -39,6 +39,7 @@ import {
   WriteFileSchema,
   parseToolCall,
   looksLikePlanning,
+  extractPhantomPaths,
   type AgentConfig,
   type AiClientLike,
   type ToolResult,
@@ -606,5 +607,108 @@ test('T-5.5 Planning response triggers nudge; agent recovers and calls tool', as
   assert.ok(executedCommands.includes('new'), `"new" must be in executed commands after nudge: ${executedCommands.join(', ')}`);
 
   // LLM called 3 times: planning → nudge → tool call → final answer
+  assert.ok(mockGenerate.mock.calls.length >= 3, `LLM must be called ≥3 times, got ${mockGenerate.mock.calls.length}`);
+});
+
+// =============================================================================
+// T-6.3 — extractPhantomPaths: detects files claimed but not on disk
+// =============================================================================
+
+test('T-6.3 extractPhantomPaths detects mentioned files missing from disk and writtenFiles', () => {
+  const cwd = process.cwd();
+  const writtenFiles = new Set<string>();
+
+  // A path that definitely doesn't exist on disk
+  const text = 'I have written openspec/changes/ghost-slug/proposal.md and design.md to disk.';
+  const phantoms = extractPhantomPaths(text, writtenFiles, cwd);
+
+  // Both paths should be flagged as phantom
+  assert.ok(phantoms.length >= 1, `Expected ≥1 phantom, got 0. Phantoms: ${JSON.stringify(phantoms)}`);
+  const joined = phantoms.join(' ');
+  assert.ok(
+    joined.includes('proposal.md') || joined.includes('design.md'),
+    `Expected phantom paths to include proposal.md or design.md. Got: ${joined}`,
+  );
+});
+
+test('T-6.3b extractPhantomPaths does NOT flag files that are in writtenFiles', () => {
+  const cwd = process.cwd();
+  // Use the actual package.json which definitely exists
+  const realFile = 'package.json';
+  const writtenFiles = new Set<string>([`${cwd}\\${realFile}`, `${cwd}/${realFile}`]);
+
+  const text = `I have written ${realFile} to disk.`;
+  const phantoms = extractPhantomPaths(text, writtenFiles, cwd);
+
+  // package.json actually exists on disk, so should NOT be phantom
+  const mentionsPackageJson = phantoms.some((p) => p.endsWith('package.json'));
+  assert.ok(
+    !mentionsPackageJson,
+    `package.json exists on disk and should not be phantom. Phantoms: ${phantoms.join(', ')}`,
+  );
+});
+
+// =============================================================================
+// T-6.4 — Truncation nudge: response at token limit triggers continuation
+// =============================================================================
+
+test('T-6.4 Token-limit truncation triggers continuation nudge', async (t) => {
+  const originalEntry = registry.get('execute_openspec');
+  t.after(() => {
+    if (originalEntry !== undefined) registry.set('execute_openspec', originalEntry);
+    else registry.delete('execute_openspec');
+  });
+
+  registry.set('execute_openspec', {
+    name: 'execute_openspec',
+    description: 'mock for T-6.4',
+    schema: ExecuteOpenspecSchema,
+    execute: async (input) => {
+      const result: ToolResult = { success: true, command: `openspec ${input.command}`, stdout: 'ok', stderr: '' };
+      return JSON.stringify(result, null, 2);
+    },
+  });
+
+  // Call 0: truncated response (usage.completionTokens === maxTokens) — no tool_call
+  // Call 1: after truncation nudge, model emits tool_call
+  // Call 2: final answer
+  let callIndex = 0;
+  const mockGenerate = t.mock.fn(async (
+    _prompt: string,
+    opts?: { maxTokens?: number },
+  ): Promise<{ content: string; usage?: { completionTokens?: number } }> => {
+    const i = callIndex++;
+    if (i === 0) {
+      // Simulate hitting the token limit — no <tool_call> was emitted
+      return {
+        content: 'I was about to call openspec new but ran out of space',
+        usage: { completionTokens: opts?.maxTokens ?? 8192 },
+      };
+    }
+    if (i === 1) {
+      return { content: '<tool_call>{"name":"execute_openspec","input":{"command":"new","args":["change","trunc-test"]}}</tool_call>' };
+    }
+    return { content: 'Done.' };
+  });
+
+  const mockClient: AiClientLike = { generateText: mockGenerate };
+
+  const config: AgentConfig = {
+    provider: 'anthropic', model: 'claude-3-5-sonnet-latest', apiKey: 'test-key',
+    baseUrl: undefined, temperature: 0.2, maxIterations: 10, cwd: process.cwd(), debug: false,
+  };
+
+  const warnLines: string[] = [];
+  const origWarn = console.warn.bind(console);
+  console.warn = (...args: unknown[]) => { warnLines.push(args.map(String).join(' ')); };
+  try {
+    await runAgent('Test truncation recovery', config, mockClient);
+  } finally {
+    console.warn = origWarn;
+  }
+
+  const hasTruncationWarn = warnLines.some((l) => l.includes('token limit'));
+  assert.ok(hasTruncationWarn, `Expected truncation warning. Got: ${warnLines.join(' | ')}`);
+  // Agent must have continued and executed the tool after the nudge
   assert.ok(mockGenerate.mock.calls.length >= 3, `LLM must be called ≥3 times, got ${mockGenerate.mock.calls.length}`);
 });

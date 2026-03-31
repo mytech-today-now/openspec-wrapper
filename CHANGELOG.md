@@ -11,6 +11,42 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [0.2.6] — 2026-03-31
+
+### Fixed
+- **`maxIterations` raised 10 → 30** — writing 9 artifacts requires at least 20 loop
+  iterations (1 `new` + 9×2 `instructions`/`write_file` + 1 `archive`).  The old default
+  of 10 guaranteed the agent could never finish a multi-artifact request.
+- **"Stop on failure" rule removed from system prompt** — the previous rule
+  *"If a command fails, report stderr verbatim and stop"* caused the model to halt the
+  entire workflow when `openspec show` returned "not found" (expected behaviour on a fresh
+  slug).  The rule is replaced with *"reason about why and take corrective action"*.
+- **Hallucinated completion now caught (phantom-file validation)** — before accepting any
+  prose response as a final answer, the agent now scans it for file-path mentions and
+  verifies each path either exists on disk or was written by `write_file` in the current
+  session.  Missing paths trigger a targeted nudge listing the unwritten files.
+- **Token-truncation detection** — `AiClientLike.generateText` now surfaces an optional
+  `usage.completionTokens` field.  When the returned token count is ≥ 99% of `maxTokens`,
+  the response was cut off before the model could emit a `<tool_call>`.  The agent injects a
+  continuation nudge ("Your response was cut off — call ONE tool now") rather than accepting
+  the truncated text as a final answer.
+
+### Changed
+- System prompt updated: added explicit rule *"Call ONLY ONE tool per response"* and
+  *"Do NOT emit a final summary until `openspec archive` has succeeded"*.
+- `extractPhantomPaths()` added as an exported helper for phantom-file validation.
+- `existsSync` and `resolve` added to imports (used by `extractPhantomPaths`).
+
+### Tests
+- **T-6.3** — `extractPhantomPaths` flags file paths mentioned in text but absent from disk
+  and the `writtenFiles` set.
+- **T-6.3b** — `extractPhantomPaths` does NOT flag paths that actually exist on disk.
+- **T-6.4** — truncated response (usage at token limit) triggers continuation nudge and the
+  agent ultimately calls the tool.
+- Total: **14 tests, all passing**.
+
+---
+
 ## [0.2.5] — 2026-03-31
 
 ### Fixed

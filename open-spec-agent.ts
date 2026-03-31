@@ -18,7 +18,8 @@ import { z } from 'zod';
 import { getAiClient } from 'ai-powered';
 import { exec } from 'node:child_process';
 import { writeFile as fsWriteFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 /**
  * Runtime configuration resolved from environment variables at startup.
@@ -102,7 +103,7 @@ export function resolveConfig(): AgentConfig {
   const apiKey        = process.env['AI_API_KEY']        ?? '';
   const baseUrl       = process.env['AI_BASE_URL'];
   const temperature   = parseFloat(process.env['AI_TEMPERATURE']     ?? '0.2');
-  const maxIterations = parseInt(process.env['AI_MAX_ITERATIONS']    ?? '10', 10);
+  const maxIterations = parseInt(process.env['AI_MAX_ITERATIONS']    ?? '30', 10);
   const cwd           = process.env['OPENSPEC_CWD']      ?? process.cwd();
   const debug         = process.env['DEBUG'] === 'true';
 
@@ -453,17 +454,19 @@ OpenSpec workflow (always follow this order):
           Writes the artifact to disk.
   3. Repeat step 2 for every artifact the user requested.
   4. execute_openspec archive --change <slug>
-       Marks the change as complete when all artifacts are written and verified.
+       Marks the change as complete when ALL artifacts are written and verified.
 
 Tools:
 - execute_openspec — ONLY mechanism for running openspec CLI commands. Never simulate output.
 - write_file — ONLY mechanism for writing artifact content to disk.
 
 Rules:
-- Never fabricate CLI output. Always use execute_openspec.
-- Always read the <output> path from the instructions result and use it exactly with write_file.
-- If a command fails, report stderr verbatim and stop.
-- End each turn with a clear statement of what was done and what comes next.
+- NEVER fabricate CLI output. Always use execute_openspec.
+- NEVER claim a file was written unless write_file returned success for it.
+- Always read the <output> path from the instructions result and pass it exactly to write_file.
+- If a command fails, reason about why and take corrective action — do NOT halt the workflow.
+- Call ONLY ONE tool per response. Never emit more than one <tool_call> block.
+- Do NOT emit a final summary until execute_openspec archive has succeeded.
 `.trim();
 
 // ── bd-43cy: zodToJsonSchema + buildToolSchema ───────────────────────────
@@ -670,6 +673,49 @@ export function looksLikePlanning(text: string): boolean {
 }
 
 /**
+ * Scans a model response for file paths the model claims to have written and
+ * returns those that do not actually exist on disk (phantom files).
+ *
+ * Strategy:
+ *  1. Extract paths from the response text using heuristic regexes.
+ *  2. Resolve relative paths against `cwd`.
+ *  3. Return paths that are NOT in `writtenFiles` and do NOT exist on disk.
+ *
+ * This catches the hallucination pattern where the model says "I have written
+ * proposal.md, design.md, …" without ever having called write_file for them.
+ *
+ * Deliberately exported so tests can unit-test the heuristic in isolation.
+ * Ref: SPEC-AGENT-006 (phantom-file validation)
+ */
+export function extractPhantomPaths(
+  text: string,
+  writtenFiles: ReadonlySet<string>,
+  cwd: string,
+): string[] {
+  // Match file paths ending in known extensions or path-separator patterns.
+  // Captures: Windows absolute (G:\...\foo.md), Unix absolute (/foo/bar.md),
+  // and relative paths (openspec/changes/slug/proposal.md).
+  const pathRe =
+    /(?:[A-Za-z]:[\\/]|\/)?(?:[\w.\-]+[\\/])*[\w.\-]+\.(?:md|json|yaml|yml|ts|js|txt)/g;
+  const candidates = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = pathRe.exec(text)) !== null) {
+    const raw = m[0];
+    // Resolve relative paths against cwd so existsSync works correctly.
+    const abs = raw.match(/^([A-Za-z]:[\\/]|\/)/) ? raw : resolve(cwd, raw);
+    candidates.add(abs);
+  }
+
+  const phantoms: string[] = [];
+  for (const abs of candidates) {
+    if (!writtenFiles.has(abs) && !existsSync(abs)) {
+      phantoms.push(abs);
+    }
+  }
+  return phantoms;
+}
+
+/**
  * Maps the agent's provider string to a ProviderName accepted by ai-powered.
  *
  * ai-powered supports: "openai" | "anthropic" | "xai" | "venice" | "custom" | "mock"
@@ -726,7 +772,11 @@ export interface AiClientLike {
   generateText(
     prompt: string,
     options?: { systemPrompt?: string; temperature?: number; maxTokens?: number },
-  ): Promise<{ content: string }>;
+  ): Promise<{
+    content: string;
+    /** Token usage reported by the provider. Used to detect truncated responses. */
+    usage?: { completionTokens?: number };
+  }>;
 }
 
 export async function runAgent(
@@ -773,6 +823,10 @@ export async function runAgent(
   // "call a tool now" correction once per planning response.  If the model
   // still returns plain text after the nudge we treat it as the final answer.
   let nudgedLastTurn = false;
+  // Tracks absolute paths of files successfully written via write_file during
+  // this session.  Used by phantom-file validation to detect hallucinated
+  // completion claims.
+  const writtenFiles = new Set<string>();
 
   while (iterations < config.maxIterations) {
     iterations++;
@@ -830,6 +884,23 @@ export async function runAgent(
     const assistantText = result.content.trim();
     turns.push(`Assistant: ${assistantText}`);
 
+    // ── Truncation detection ──────────────────────────────────────────────
+    // When the model's response consumed all available tokens the output was
+    // cut off before a <tool_call> block could be completed.  Inject a nudge
+    // so the model continues from where it was cut rather than hallucinating.
+    const completionTokens = result.usage?.completionTokens ?? 0;
+    if (!nudgedLastTurn && completionTokens > 0 && completionTokens >= callOptions.maxTokens! * 0.99) {
+      console.warn(
+        `⚠️  Response hit token limit (${completionTokens}/${callOptions.maxTokens}) — nudging to continue.`,
+      );
+      nudgedLastTurn = true;
+      turns.push(
+        'Human: Your previous response was cut off because it was too long. ' +
+        'Call EXACTLY ONE tool now to continue the task — do not repeat or summarise previous work.',
+      );
+      continue;
+    }
+
     // ── Parse tool call from response ─────────────────────────────────────
     const toolCall = parseToolCall(assistantText);
 
@@ -844,6 +915,16 @@ export async function runAgent(
       try {
         resultContent = await dispatchTool(toolCall.name, toolCall.input);
         console.log(`📋 Result: ${resultContent}`);
+
+        // Track successfully written files so we can validate the final answer.
+        if (toolCall.name === 'write_file') {
+          try {
+            const parsed = JSON.parse(resultContent) as { success?: boolean; path?: string };
+            if (parsed.success && typeof parsed.path === 'string') {
+              writtenFiles.add(parsed.path);
+            }
+          } catch { /* ignore parse errors — result may not be JSON */ }
+        }
       } catch (err) {
         resultContent =
           `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -869,6 +950,26 @@ export async function runAgent(
         'You MUST output a <tool_call> block right now — do not explain, just call the tool.',
       );
       continue;
+    }
+
+    // ── Phantom-file validation ───────────────────────────────────────────
+    // Before accepting a final answer, scan the response for file paths the
+    // model claims to have written.  If any of those paths do not exist on
+    // disk, the model hallucinated the completion — nudge it to write them.
+    if (!nudgedLastTurn) {
+      const phantoms = extractPhantomPaths(assistantText, writtenFiles, config.cwd);
+      if (phantoms.length > 0) {
+        console.warn(
+          `⚠️  Model claimed completion but ${phantoms.length} file(s) are missing — nudging.`,
+        );
+        nudgedLastTurn = true;
+        turns.push(
+          'Human: You claimed the task is complete, but the following files were never written to disk:\n' +
+          phantoms.map((p) => `  - ${p}`).join('\n') + '\n' +
+          'You MUST call write_file for each missing file. Start with the first one now.',
+        );
+        continue;
+      }
     }
 
     // ── No tool call and not planning → genuine final answer ─────────────
