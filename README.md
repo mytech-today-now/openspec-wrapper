@@ -4,7 +4,8 @@
 > via natural language.  One command drives the full
 > `propose → review → apply → archive` workflow autonomously.
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue)](CHANGELOG.md)
+[![npm](https://img.shields.io/badge/npm-GitHub%20Packages-orange)](https://github.com/mytech-today-now/openspec-wrapper/pkgs/npm/openspec-wrapper)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520%20LTS-brightgreen)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-Private-lightgrey)](#license)
 
@@ -23,7 +24,7 @@
 7. [NPM Scripts](#npm-scripts)
 8. [Configuration Reference](#configuration-reference)
 9. [Project Structure](#project-structure)
-10. [Development](#development)
+10. [Contributing / Local Development](#contributing--local-development)
 11. [Uninstall](#uninstall)
 12. [Troubleshooting](#troubleshooting)
 13. [Changelog](#changelog)
@@ -60,7 +61,6 @@ The agent will:
 | npm          | ≥ 10       | Included with Node.js ≥ 20               |
 | OpenSpec CLI | any        | `npm install -g openspec`                 |
 | LLM API key  | —          | See [Environment Setup](#environment-setup) |
-| Git          | any        | <https://git-scm.com>                     |
 
 > **Ollama users:** No API key is needed.  Set `AI_PROVIDER=ollama` and
 > `AI_BASE_URL=http://localhost:11434/v1` in your `.env`.
@@ -69,40 +69,43 @@ The agent will:
 
 ## Installation
 
-### Clone and install dependencies
+The package is published to **GitHub Packages** under the
+`@mytech-today-now` scope.
 
-```bash
-# 1. Clone the repository
-git clone https://github.com/mytech-today-now/openspec-wrapper.git
-cd openspec-wrapper
+### Step 1 — Authenticate with GitHub Packages
 
-# 2. Install Node dependencies
-npm install
-
-# 3. Install the OpenSpec CLI globally (if not already installed)
-npm install -g openspec
-```
-
-### Install as a package dependency (GitHub Packages)
-
-If you want to consume `openspec-wrapper` as a library inside another project,
-add the GitHub Packages registry to that project's `.npmrc`:
+Add the following to your project's `.npmrc` (or your global `~/.npmrc`):
 
 ```ini
-# .npmrc (in the consumer project)
 @mytech-today-now:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 ```
 
-Then install:
+`NODE_AUTH_TOKEN` must be a GitHub Personal Access Token (classic) with the
+**`read:packages`** scope.  Generate one at
+<https://github.com/settings/tokens/new>.
+
+Set it in your shell:
+
+```bash
+# bash / zsh
+export NODE_AUTH_TOKEN=ghp_your_token_here
+
+# PowerShell
+$env:NODE_AUTH_TOKEN = "ghp_your_token_here"
+```
+
+### Step 2 — Install the package
 
 ```bash
 npm install @mytech-today-now/openspec-wrapper
 ```
 
-> `NODE_AUTH_TOKEN` must be a GitHub Personal Access Token with
-> **read:packages** scope.  Generate one at
-> <https://github.com/settings/tokens>.
+### Step 3 — Install the OpenSpec CLI
+
+```bash
+npm install -g openspec
+```
 
 ---
 
@@ -285,7 +288,16 @@ openspec-wrapper/
 
 ---
 
-## Development
+## Contributing / Local Development
+
+### Clone the repository
+
+```bash
+git clone https://github.com/mytech-today-now/openspec-wrapper.git
+cd openspec-wrapper
+npm install
+cp .env.example .env   # fill in your API key
+```
 
 ### Running tests
 
@@ -306,6 +318,18 @@ All four tests must pass:
 
 ```bash
 npm run typecheck
+```
+
+### Publishing a new version
+
+```bash
+# 1. Bump version in package.json, VERSION, and CHANGELOG.md
+# 2. Commit and push
+git add . && git commit -m "chore(release): vX.Y.Z" && git push origin main
+
+# 3. Set your GitHub PAT with write:packages scope, then publish
+$env:NODE_AUTH_TOKEN = "ghp_your_token_here"   # PowerShell
+npm publish
 ```
 
 ### Adding a new tool
@@ -342,14 +366,20 @@ parses and dispatches.  This works with **any** LLM provider.
 
 ## Uninstall
 
-### Remove the package from a consumer project
+### Remove the package from your project
 
 ```bash
 npm uninstall @mytech-today-now/openspec-wrapper
 ```
 
-Then remove the registry entry from the consumer project's `.npmrc` if it is
-no longer needed.
+Then remove the registry entry from your project's `.npmrc` if no other
+`@mytech-today-now` packages are used:
+
+```ini
+# remove or comment out these lines in .npmrc
+# @mytech-today-now:registry=https://npm.pkg.github.com
+# //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
 
 ### Remove the OpenSpec CLI
 
@@ -357,22 +387,20 @@ no longer needed.
 npm uninstall -g openspec
 ```
 
-### Remove the cloned repository
+### Remove your `.env` file
+
+Your `.env` file contains your API key and is **not** tracked by Git.
+Delete it manually when no longer needed:
 
 ```bash
-cd ..
-rm -rf openspec-wrapper    # macOS / Linux
-# PowerShell: Remove-Item -Recurse -Force openspec-wrapper
+rm .env                          # macOS / Linux / Git Bash
+Remove-Item .env                 # PowerShell
 ```
 
-### Remove the `.env` file
+### Revoke your GitHub PAT
 
-The `.env` file contains your API key and is **not** tracked by Git — delete
-it manually when you no longer need it:
-
-```bash
-rm .env
-```
+If you created a token solely for this package, revoke it at
+<https://github.com/settings/tokens> to prevent unintended access.
 
 ---
 
@@ -446,4 +474,6 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 ## License
 
 Private — all rights reserved.  See repository settings for access controls.
+
+Package registry: [GitHub Packages — @mytech-today-now/openspec-wrapper](https://github.com/mytech-today-now/openspec-wrapper/pkgs/npm/openspec-wrapper)
 
