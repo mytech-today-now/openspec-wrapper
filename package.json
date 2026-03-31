@@ -1,5 +1,5 @@
 {
-  "name": "@mytech-today-now/openspec-wrapper",
+  "name": "@mytechtoday/openspec-wrapper",
   "version": "0.2.1",
   "description": "AI agent wrapper that drives the openspec CLI via natural language",
   "type": "module",

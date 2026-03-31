@@ -33,7 +33,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 - First public release to npmjs.com
-  (`https://www.npmjs.com/package/@mytech-today-now/openspec-wrapper`).
+  (`https://www.npmjs.com/package/@mytechtoday/openspec-wrapper`).
+- Package renamed from `@mytech-today-now/openspec-wrapper` to
+  `@mytechtoday/openspec-wrapper` to match the npm username `mytechtoday`.
 
 ---
 
@@ -75,7 +77,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   string (`Human:` / `Assistant:` / `Tool Result:` sections) rather than an
   array of `Anthropic.MessageParam` objects.
 - Package name scoped to `@mytech-today-now/openspec-wrapper` for npm registry
-  publishing.
+  publishing (later renamed to `@mytechtoday/openspec-wrapper` in v0.2.1).
 - Version bumped from `0.1.0` to `0.2.0`.
 
 ### Removed

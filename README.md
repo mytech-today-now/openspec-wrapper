@@ -5,7 +5,7 @@
 > `propose → review → apply → archive` workflow autonomously.
 
 [![Version](https://img.shields.io/badge/version-0.2.1-blue)](CHANGELOG.md)
-[![npm](https://img.shields.io/npm/v/%40mytech-today-now%2Fopenspec-wrapper?label=npm)](https://www.npmjs.com/package/@mytech-today-now/openspec-wrapper)
+[![npm](https://img.shields.io/npm/v/%40mytechtoday%2Fopenspec-wrapper?label=npm)](https://www.npmjs.com/package/@mytechtoday/openspec-wrapper)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520%20LTS-brightgreen)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-Private-lightgrey)](#license)
 
@@ -74,7 +74,7 @@ The package is published publicly to **npmjs.com**.
 ### Step 1 — Install the package
 
 ```bash
-npm install @mytech-today-now/openspec-wrapper
+npm install @mytechtoday/openspec-wrapper
 ```
 
 No authentication or `.npmrc` changes are needed — it is a public package.
@@ -347,7 +347,7 @@ parses and dispatches.  This works with **any** LLM provider.
 ### Remove the package from your project
 
 ```bash
-npm uninstall @mytech-today-now/openspec-wrapper
+npm uninstall @mytechtoday/openspec-wrapper
 ```
 
 ### Remove the OpenSpec CLI
@@ -439,5 +439,5 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 Private — all rights reserved.  See repository settings for access controls.
 
-Package registry: [npmjs.com — @mytech-today-now/openspec-wrapper](https://www.npmjs.com/package/@mytech-today-now/openspec-wrapper)
+Package registry: [npmjs.com — @mytechtoday/openspec-wrapper](https://www.npmjs.com/package/@mytechtoday/openspec-wrapper)
 
