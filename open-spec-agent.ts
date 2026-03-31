@@ -565,20 +565,36 @@ export function buildToolSchema(tool: ToolDefinition): {
  * <tool_call>…</tool_call> tags whenever it wants to call a tool.  The agent
  * parses that marker with parseToolCall() and dispatches via dispatchTool().
  *
+ * Language is deliberately forceful to work across providers (especially GPT-4o,
+ * which tends to narrate plans in natural language rather than calling tools).
+ *
  * Ref: SPEC-AGENT-003, text-based ReAct protocol
  */
 function buildToolSystemPrompt(tools: ToolDefinition[]): string {
   const schemas = tools.map(buildToolSchema);
   return [
-    'TOOL CALLING PROTOCOL:',
-    'When you need to use a tool, output ONLY this block (nothing else on those lines):',
+    '=== TOOL CALLING PROTOCOL (MANDATORY) ===',
+    '',
+    'You MUST call tools to complete any task. NEVER narrate, plan, or explain what you',
+    'are going to do. When action is required, output a <tool_call> block IMMEDIATELY.',
+    '',
+    'FORMAT — when calling a tool, your entire response must be this and nothing else:',
     '',
     '<tool_call>',
     '{"name": "TOOL_NAME", "input": TOOL_INPUT_JSON}',
     '</tool_call>',
     '',
-    'After a tool result is returned, continue reasoning.',
-    'When finished, output your final answer as plain text with no <tool_call> block.',
+    'EXAMPLE (creating a change):',
+    '<tool_call>',
+    '{"name": "execute_openspec", "input": {"command": "new", "args": ["change", "my-feature"]}}',
+    '</tool_call>',
+    '',
+    'RULES (violations cause task failure):',
+    '1. ONE tool call per response. Wait for the result before calling the next tool.',
+    '2. NEVER say "I will...", "Let me...", "First I need to..." — just call the tool.',
+    '3. NEVER simulate or fabricate tool output. Real results come only from tool calls.',
+    '4. After ALL tools have been called and results received, write your final summary',
+    '   as plain text with no <tool_call> block. That is the ONLY time you write prose.',
     '',
     'Available tools (JSON Schema):',
     JSON.stringify(schemas, null, 2),
@@ -586,19 +602,61 @@ function buildToolSystemPrompt(tools: ToolDefinition[]): string {
 }
 
 /**
- * Extracts the first <tool_call> block from an LLM response text and parses
- * the embedded JSON.  Returns null when no valid tool call is found.
+ * Extracts the first tool call from an LLM response text and parses the
+ * embedded JSON.  Returns null when no valid tool call is found.
+ *
+ * Two formats are recognised (in priority order):
+ *  1. <tool_call>JSON</tool_call>  — primary protocol (all providers)
+ *  2. ```json\nJSON\n```           — fallback for GPT-4o, which sometimes wraps
+ *     its tool-call JSON in a markdown code fence instead of XML tags
+ *
+ * In both cases the JSON object must have a "name" string field.
+ * An optional "input" field holds the tool arguments (defaults to {}).
  *
  * Ref: SPEC-AGENT-004, text-based ReAct protocol
  */
-function parseToolCall(text: string): { name: string; input: unknown } | null {
-  const match = /<tool_call>([\s\S]*?)<\/tool_call>/i.exec(text);
-  if (!match || !match[1]) return null;
-  try {
-    return JSON.parse(match[1].trim()) as { name: string; input: unknown };
-  } catch {
-    return null;
+export function parseToolCall(text: string): { name: string; input: unknown } | null {
+  // ── Primary: <tool_call>…</tool_call> ─────────────────────────────────
+  const xmlMatch = /<tool_call>([\s\S]*?)<\/tool_call>/i.exec(text);
+  if (xmlMatch?.[1]) {
+    try {
+      const obj = JSON.parse(xmlMatch[1].trim()) as { name?: string; input?: unknown };
+      if (typeof obj.name === 'string') return { name: obj.name, input: obj.input ?? {} };
+    } catch {
+      // malformed JSON — fall through to code-block check
+    }
   }
+
+  // ── Fallback: ```json … ``` code block (GPT-4o style) ─────────────────
+  // Matches optional "json" language tag and captures the object literal.
+  const codeMatch = /```(?:json)?\s*(\{[\s\S]*?\})\s*```/i.exec(text);
+  if (codeMatch?.[1]) {
+    try {
+      const obj = JSON.parse(codeMatch[1].trim()) as { name?: string; input?: unknown };
+      if (typeof obj.name === 'string') return { name: obj.name, input: obj.input ?? {} };
+    } catch {
+      // malformed JSON — fall through
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Returns true when the LLM response looks like narration / planning rather
+ * than a genuine final answer.  Used by the nudge mechanism in runAgent to
+ * detect when GPT-4o (or any model) described what it *intends* to do instead
+ * of immediately calling a tool.
+ *
+ * Patterns matched: "I will", "I'll", "Let me", "First,", "Next,",
+ * "I need to", "I'm going to", "To start", "I should".
+ *
+ * Deliberately exported so tests can unit-test the heuristic in isolation.
+ */
+export function looksLikePlanning(text: string): boolean {
+  return /\b(I will|I'll|let me|first,|next,|I need to|I'm going to|to start|I should)\b/i.test(
+    text,
+  );
 }
 
 /**
@@ -701,6 +759,10 @@ export async function runAgent(
 
   // ── ReAct loop ───────────────────────────────────────────────────────────
   let iterations = 0;
+  // nudgedLastTurn prevents infinite nudge cycles: we only inject the
+  // "call a tool now" correction once per planning response.  If the model
+  // still returns plain text after the nudge we treat it as the final answer.
+  let nudgedLastTurn = false;
 
   while (iterations < config.maxIterations) {
     iterations++;
@@ -710,7 +772,7 @@ export async function runAgent(
     const callOptions = {
       systemPrompt,
       temperature: config.temperature,
-      maxTokens:   4096,
+      maxTokens:   8192,
     };
 
     // ── DEBUG: log raw request payload ────────────────────────────────────
@@ -735,6 +797,8 @@ export async function runAgent(
     const toolCall = parseToolCall(assistantText);
 
     if (toolCall !== null) {
+      // Model called a tool — reset nudge flag and dispatch.
+      nudgedLastTurn = false;
       console.log(`🔧 Tool: ${toolCall.name}`);
       let resultContent: string;
 
@@ -751,7 +815,24 @@ export async function runAgent(
       continue;
     }
 
-    // ── No tool call → final answer ───────────────────────────────────────
+    // ── No tool call: check for planning narration (GPT-4o pattern) ──────
+    // When the model describes what it *plans* to do instead of calling a
+    // tool, inject a single correction turn.  nudgedLastTurn ensures we only
+    // do this once — if the model still narrates after the nudge we fall
+    // through to the final-answer path rather than looping indefinitely.
+    if (!nudgedLastTurn && looksLikePlanning(assistantText)) {
+      console.warn(
+        '⚠️  Model narrated a plan instead of calling a tool — nudging it to act.',
+      );
+      nudgedLastTurn = true;
+      turns.push(
+        'Human: You described a plan but did not call any tool. ' +
+        'You MUST output a <tool_call> block right now — do not explain, just call the tool.',
+      );
+      continue;
+    }
+
+    // ── No tool call and not planning → genuine final answer ─────────────
     console.log('\n✅ Agent response:\n');
     console.log(assistantText);
     return;

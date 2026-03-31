@@ -11,6 +11,33 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [0.2.4] — 2026-03-31
+
+### Fixed
+- **GPT-4o narration bug** — the agent now detects when the model narrates a plan in plain
+  text instead of calling a tool, and injects a one-time "nudge" correction turn that
+  instructs the model to emit a `<tool_call>` block immediately.  A `nudgedLastTurn` flag
+  prevents infinite nudge cycles — if the model still narrates after the nudge the response
+  is treated as the final answer.
+- **Code-block tool-call fallback** — `parseToolCall` now recognises the ` ```json ` code
+  fence format that GPT-4o sometimes emits instead of the primary `<tool_call>` XML tags.
+
+### Changed
+- `buildToolSystemPrompt` rewritten with explicit anti-narration rules, a worked example,
+  and numbered constraints to make the tool-calling protocol harder to ignore across all
+  providers.
+- `maxTokens` raised from 4 096 to 8 192 to accommodate longer artifact content.
+- `parseToolCall` exported (was private) to enable direct unit testing.
+
+### Added
+- `looksLikePlanning(text)` — exported helper function that returns `true` when the model
+  response matches common narration patterns (`I will`, `I'll`, `Let me`, `First,`, etc.).
+- **7 new unit tests** — T-6.1 a/b/c/d (parseToolCall XML, code-block, prose, malformed JSON),
+  T-6.2 a/b (looksLikePlanning positive/negative), T-5.5 (nudge integration test).
+  Total test count raised from 4 to 11.
+
+---
+
 ## [0.2.3] — 2026-03-31
 
 ### Fixed

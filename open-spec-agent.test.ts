@@ -37,6 +37,8 @@ import {
   registry,
   ExecuteOpenspecSchema,
   WriteFileSchema,
+  parseToolCall,
+  looksLikePlanning,
   type AgentConfig,
   type AiClientLike,
   type ToolResult,
@@ -465,4 +467,141 @@ test('T-2.5 ai-powered mock client returns a non-empty text result', async () =>
     typeof result.content === 'string' && result.content.length > 0,
     `Expected result.content to be a non-empty string, got: ${JSON.stringify(result.content)}`,
   );
+});
+
+// =============================================================================
+// T-6.1 — parseToolCall: XML and code-block format coverage
+// =============================================================================
+//
+// Verifies that parseToolCall handles both the primary <tool_call> XML
+// protocol AND the GPT-4o code-block fallback, and returns null for
+// invalid/absent tool calls.
+// =============================================================================
+
+test('T-6.1 parseToolCall parses <tool_call> XML format', () => {
+  const text =
+    '<tool_call>\n{"name":"execute_openspec","input":{"command":"new","args":["change","foo"]}}\n</tool_call>';
+  const result = parseToolCall(text);
+  assert.ok(result !== null, 'should parse XML tool call');
+  assert.strictEqual(result!.name, 'execute_openspec');
+  assert.deepStrictEqual((result!.input as { command: string }).command, 'new');
+});
+
+test('T-6.1b parseToolCall parses ```json code-block fallback (GPT-4o style)', () => {
+  const text =
+    'Sure, here is the tool call:\n```json\n{"name":"write_file","input":{"path":"/tmp/x.md","content":"hello"}}\n```';
+  const result = parseToolCall(text);
+  assert.ok(result !== null, 'should parse code-block tool call');
+  assert.strictEqual(result!.name, 'write_file');
+});
+
+test('T-6.1c parseToolCall returns null for plain prose (no tool call)', () => {
+  const text = 'I will create the change now. Let me start by running openspec new.';
+  const result = parseToolCall(text);
+  assert.strictEqual(result, null, 'planning prose must not be parsed as a tool call');
+});
+
+test('T-6.1d parseToolCall returns null for malformed JSON', () => {
+  const text = '<tool_call>{not valid json}</tool_call>';
+  const result = parseToolCall(text);
+  assert.strictEqual(result, null, 'malformed JSON must return null');
+});
+
+// =============================================================================
+// T-6.2 — looksLikePlanning: planning-language detection
+// =============================================================================
+
+test('T-6.2 looksLikePlanning detects GPT-4o narration patterns', () => {
+  const planning = [
+    'I will create the change now.',
+    "I'll start by running openspec new.",
+    'Let me first create the directory.',
+    'First, I need to create the change.',
+    "I'm going to run openspec new change.",
+    'To start, I should call openspec.',
+  ];
+  for (const text of planning) {
+    assert.ok(looksLikePlanning(text), `Expected planning detection for: "${text}"`);
+  }
+});
+
+test('T-6.2b looksLikePlanning does NOT flag genuine final answers', () => {
+  const finalAnswers = [
+    'The specification has been created successfully.',
+    'All artifacts have been written to disk.',
+    'Done. Created change and fetched proposal instructions.',
+    'No open proposals found.',
+  ];
+  for (const text of finalAnswers) {
+    assert.ok(!looksLikePlanning(text), `Expected NO planning detection for: "${text}"`);
+  }
+});
+
+// =============================================================================
+// T-5.5 — Nudge mechanism: planning response triggers one correction turn
+// =============================================================================
+//
+// Strategy:
+//  • Script the mock LLM to return planning prose on call 0, then a real
+//    <tool_call> on call 1 (after the nudge), then a final answer on call 2.
+//  • Assert the agent logged a warning about the nudge.
+//  • Assert the tool was ultimately executed (nudge was effective).
+// =============================================================================
+
+test('T-5.5 Planning response triggers nudge; agent recovers and calls tool', async (t) => {
+  const executedCommands: string[] = [];
+
+  const originalEntry = registry.get('execute_openspec');
+  t.after(() => {
+    if (originalEntry !== undefined) registry.set('execute_openspec', originalEntry);
+    else registry.delete('execute_openspec');
+  });
+
+  registry.set('execute_openspec', {
+    name: 'execute_openspec',
+    description: 'mock for T-5.5',
+    schema: ExecuteOpenspecSchema,
+    execute: async (input) => {
+      executedCommands.push(input.command);
+      const result: ToolResult = { success: true, command: `openspec ${input.command}`, stdout: 'ok', stderr: '' };
+      return JSON.stringify(result, null, 2);
+    },
+  });
+
+  // Call 0: plain planning prose (no <tool_call>) → triggers nudge
+  // Call 1: proper <tool_call> after receiving the nudge correction
+  // Call 2: final answer
+  let callIndex = 0;
+  const mockGenerate = t.mock.fn(async (): Promise<{ content: string }> => {
+    const i = callIndex++;
+    if (i === 0) return { content: "I will create the change now. Let me start by running openspec new." };
+    if (i === 1) return { content: '<tool_call>{"name":"execute_openspec","input":{"command":"new","args":["change","test-nudge"]}}</tool_call>' };
+    return { content: 'Done. Created the change.' };
+  });
+
+  const mockClient: AiClientLike = { generateText: mockGenerate };
+
+  const config: AgentConfig = {
+    provider: 'openai', model: 'gpt-4o', apiKey: 'test-key',
+    baseUrl: undefined, temperature: 0.2, maxIterations: 10, cwd: process.cwd(), debug: false,
+  };
+
+  const warnLines: string[] = [];
+  const origWarn = console.warn.bind(console);
+  console.warn = (...args: unknown[]) => { warnLines.push(args.map(String).join(' ')); };
+  try {
+    await runAgent('Create a test change', config, mockClient);
+  } finally {
+    console.warn = origWarn;
+  }
+
+  // Nudge warning must have been logged
+  const hasNudgeWarn = warnLines.some((l) => l.includes('narrated a plan'));
+  assert.ok(hasNudgeWarn, `Expected nudge warning in console.warn. Got: ${warnLines.join(' | ')}`);
+
+  // Tool must have been called after the nudge
+  assert.ok(executedCommands.includes('new'), `"new" must be in executed commands after nudge: ${executedCommands.join(', ')}`);
+
+  // LLM called 3 times: planning → nudge → tool call → final answer
+  assert.ok(mockGenerate.mock.calls.length >= 3, `LLM must be called ≥3 times, got ${mockGenerate.mock.calls.length}`);
 });
