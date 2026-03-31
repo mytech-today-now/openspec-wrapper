@@ -314,10 +314,20 @@ registry.set('execute_openspec', {
   name: 'execute_openspec',
   description:
     'Execute an OpenSpec CLI subcommand. ' +
-    'This is the ONLY mechanism for running openspec commands — never simulate output. ' +
-    'Subcommands: new (create a change), instructions (get per-artifact writing instructions), ' +
-    'archive, list, status, init, validate, show. ' +
-    'Returns JSON: { success: boolean, command: string, stdout: string, stderr: string }.',
+    'This is the ONLY mechanism for running openspec commands — NEVER simulate output. ' +
+    'Returns JSON: { success: boolean, command: string, stdout: string, stderr: string }.\n' +
+    '\n' +
+    'Command reference (args array / flags object):\n' +
+    '  new change <slug>         args:["change","<slug>"]  — create a change directory\n' +
+    '  instructions <artifact>   args:["<artifact>"]  flags:{change:"<slug>"}  — get artifact writing instructions + output path\n' +
+    '  archive                   flags:{change:"<slug>"}  — mark a change as complete\n' +
+    '  list                      (no args)  — list all changes\n' +
+    '  status                    (no args)  — show workspace status\n' +
+    '  show <slug>               args:["<slug>"]  — show a change or spec; ONE positional arg only.\n' +
+    '                            Use flags:{type:"change"} or flags:{type:"spec"} only when ambiguous.\n' +
+    '                            NEVER pass "change" or "spec" as a positional arg to show.\n' +
+    '  validate                  (no args)  — validate workspace\n' +
+    '  init                      (no args)  — initialise workspace',
   schema: ExecuteOpenspecSchema,
   execute: (input) =>
     executeOpenspec(input, process.env['OPENSPEC_CWD'] ?? process.cwd()),
@@ -781,8 +791,35 @@ export async function runAgent(
       console.error(JSON.stringify({ prompt, options: callOptions }, null, 2));
     }
 
-    // ── LLM call ──────────────────────────────────────────────────────────
-    const result = await client.generateText(prompt, callOptions);
+    // ── LLM call (with outer retry for transient overload/rate-limit errors) ──
+    // The ai-powered library retries 3× internally with ~250–500 ms gaps, which
+    // is insufficient when Anthropic returns 529 Overloaded.  This outer loop
+    // adds three additional attempts with 10 s → 20 s → 40 s backoff, giving
+    // the API time to recover before we give up entirely.
+    const OUTER_RETRIES = 3;
+    const OVERLOAD_DELAYS_MS = [10_000, 20_000, 40_000];
+    let result!: Awaited<ReturnType<typeof client.generateText>>;
+    for (let attempt = 0; attempt <= OUTER_RETRIES; attempt++) {
+      try {
+        result = await client.generateText(prompt, callOptions);
+        break; // success — exit retry loop
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const isTransient =
+          /529|overloaded|rate.?limit|too many requests/i.test(msg);
+        if (isTransient && attempt < OUTER_RETRIES) {
+          const waitMs = OVERLOAD_DELAYS_MS[attempt] ?? 40_000;
+          console.warn(
+            `⏳ LLM overloaded (attempt ${attempt + 1}/${OUTER_RETRIES}) — ` +
+            `waiting ${waitMs / 1000}s before retry…`,
+          );
+          await new Promise<void>((res) => setTimeout(res, waitMs));
+        } else {
+          // Non-transient error or out of retries — propagate.
+          throw err;
+        }
+      }
+    }
 
     // ── DEBUG: log raw response ───────────────────────────────────────────
     if (config.debug) {
@@ -798,8 +835,10 @@ export async function runAgent(
 
     if (toolCall !== null) {
       // Model called a tool — reset nudge flag and dispatch.
+      // Note: individual tools (executeOpenspec, writeFileTool) log their own
+      // 🔧 lines with the fully-assembled command/path, which is more useful
+      // than repeating the bare tool name here.
       nudgedLastTurn = false;
-      console.log(`🔧 Tool: ${toolCall.name}`);
       let resultContent: string;
 
       try {

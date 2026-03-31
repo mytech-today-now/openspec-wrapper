@@ -193,11 +193,14 @@ test('T-5.2 `new` precedes `instructions` in console output (real workflow order
     `in: [${executedCommands.join(', ')}]`,
   );
 
-  // The agent logs "execute_openspec" for each tool call (AC-2: agent emits
-  // tool output in the expected order). We verify the tool name appears in the
-  // log at least once — the ordering is already proven by executedCommands.
-  const hasToolLog = lines.some((l) => l.includes('execute_openspec'));
-  assert.ok(hasToolLog, 'console output must log the execute_openspec tool call');
+  // The agent must log a "📋 Result:" line for each tool dispatch (AC-2).
+  // The tool name / command is tracked by executedCommands above; here we just
+  // confirm that runAgent emitted at least one result log, proving the tool
+  // round-trip was completed.  (The removed runAgent "🔧 Tool: <name>" log is
+  // no longer the source of this evidence — individual tools log their own 🔧
+  // lines, and runAgent always emits 📋 Result: after a successful dispatch.)
+  const hasResultLog = lines.some((l) => l.includes('📋 Result:'));
+  assert.ok(hasResultLog, 'console output must log a 📋 Result: line after each tool dispatch');
 
   // Agent must complete with a final answer (equivalent to exit code 0).
   const hasAnswer = lines.some(

@@ -11,6 +11,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [0.2.5] — 2026-03-31
+
+### Fixed
+- **Redundant `🔧 Tool:` log removed** — `runAgent` previously logged the bare tool name
+  with the same `🔧 Tool:` prefix used by `executeOpenspec` and `writeFileTool`, producing
+  two consecutive `🔧` lines per invocation.  The redundant outer log is removed; individual
+  tools continue to log the fully-assembled command/path, which is more useful.
+- **`openspec show` wrong argument count** — the tool description for `execute_openspec` now
+  explicitly documents that `show` takes exactly **one** positional arg (the slug) and that
+  `--type change|spec` is the correct way to disambiguate.  The previous description was too
+  vague and caused the model to pass two positional args, crashing the CLI with
+  *"too many arguments"*.
+- **Anthropic 529 Overloaded crash** — `client.generateText()` is now wrapped in an outer
+  retry loop (up to 3 attempts) with 10 s → 20 s → 40 s exponential backoff.  The `ai-powered`
+  library's internal retries (~250–500 ms) are insufficient when the Anthropic API is under
+  heavy load; the outer loop gives the API meaningful recovery time before re-throwing.
+
+### Changed
+- `execute_openspec` tool description rewritten as a per-command reference showing exact
+  `args[]` and `flags{}` usage for `new`, `instructions`, `archive`, `show`, `list`, `status`,
+  `validate`, and `init`.
+- T-5.2 assertion updated: checks for `📋 Result:` log instead of bare tool-name log
+  (aligns with the new logging behaviour).
+
+---
+
 ## [0.2.4] — 2026-03-31
 
 ### Fixed
