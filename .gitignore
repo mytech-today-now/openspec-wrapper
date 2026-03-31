@@ -25,3 +25,6 @@ Thumbs.db
 *.ntvs*
 *.njsproj
 *.sln
+
+# scripts
+scripts/
