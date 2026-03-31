@@ -11,6 +11,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [0.2.3] — 2026-03-31
+
+### Fixed
+- **Fictional CLI commands removed** — `execute_openspec` now rejects `propose` and `apply`
+  (which never existed in the `openspec` binary) and whitelists only real subcommands:
+  `new`, `instructions`, `archive`, `list`, `status`, `init`, `validate`, `show`.
+- **Missing file-writing capability** — added `write_file` tool that writes UTF-8 content
+  to disk, creating parent directories as needed. The `openspec` CLI only generates
+  instructions; the agent must now call `write_file` to materialise each artifact.
+- **System prompt corrected** — updated `SYSTEM_PROMPT` to describe the real workflow:
+  `new` → `instructions` → `write_file` (per artifact) → `archive`.
+
+### Changed
+- `ExecuteOpenspecSchema` enum updated from `['propose','apply','archive','status','list','init']`
+  to `['new','instructions','archive','list','status','init','validate','show']`.
+- `execute_openspec` registry description updated to list real subcommands.
+- T-5.2 test updated: asserts `new` precedes `instructions` (was `propose` before `apply`).
+
+### Added
+- `WriteFileSchema` and `WriteFileInput` exported types.
+- `writeFileTool()` function (exported) — uses `fs/promises.writeFile` + `mkdir({ recursive: true })`.
+- `write_file` registered in the global tool registry.
+
+---
+
 ## [0.2.2] — 2026-03-31
 
 ### Fixed

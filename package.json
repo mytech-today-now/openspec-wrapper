@@ -1,6 +1,6 @@
 {
   "name": "@mytechtoday/openspec-wrapper",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "AI agent wrapper that drives the openspec CLI via natural language",
   "type": "module",
   "engines": {
@@ -34,6 +34,7 @@
     "url": "https://github.com/mytech-today-now/openspec-wrapper.git"
   },
   "dependencies": {
+    "@mytechtoday/openspec-wrapper": "^0.2.2",
     "ai-powered": "^0.1.0",
     "zod": "^3.25.76"
   },

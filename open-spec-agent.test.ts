@@ -5,7 +5,7 @@
  *
  * Tests:
  *   T-2.5 (bd-8eft) — smoke-test ai-powered client wiring via mock mode.
- *   T-5.2 (bd-66f8) — verify propose precedes apply in the ReAct loop.
+ *   T-5.2 (bd-66f8) — verify `new` precedes `instructions` in the ReAct loop.
  *   T-5.3 (bd-c4ud) — verify missing/invalid API key exits with code 1 and
  *                      emits a clear error on stderr; no LLM call made.
  *   T-5.4 (bd-evku) — verify DEBUG mode emits LLM payloads to stderr.
@@ -17,10 +17,10 @@
  * • Override the execute_openspec registry entry to capture tool calls in order
  *   without invoking the real openspec CLI or child_process.exec.
  * • Script the mock LLM to emit exactly two tool_use turns then end_turn:
- *     turn 1 → execute_openspec { command: "propose", args: ["dark-mode-toggle"] }
- *     turn 2 → execute_openspec { command: "apply",   args: ["dark-mode-toggle"] }
+ *     turn 1 → execute_openspec { command: "new",          args: ["change", "dark-mode-toggle"] }
+ *     turn 2 → execute_openspec { command: "instructions", args: ["--change", "dark-mode-toggle", "proposal"] }
  *     turn 3 → end_turn (final answer)
- * • Capture console.log lines and assert "propose" appears before "apply".
+ * • Capture console.log lines and assert "new" appears before "instructions".
  * • For T-5.4: capture console.error lines and assert DEBUG headers + JSON payloads
  *   are present while console.log (stdout) still shows the normal agent output.
  */
@@ -36,6 +36,7 @@ import {
   resolveConfig,
   registry,
   ExecuteOpenspecSchema,
+  WriteFileSchema,
   type AgentConfig,
   type AiClientLike,
   type ToolResult,
@@ -78,7 +79,7 @@ async function captureLog(fn: () => Promise<void>): Promise<string[]> {
 
 // ── Test ───────────────────────────────────────────────────────────────────
 
-test('T-5.2 propose precedes apply in console output', async (t) => {
+test('T-5.2 `new` precedes `instructions` in console output (real workflow order)', async (t) => {
   // ── 1. Track executed openspec commands in order ───────────────────────
   const executedCommands: string[] = [];
 
@@ -100,10 +101,14 @@ test('T-5.2 propose precedes apply in console output', async (t) => {
     schema: ExecuteOpenspecSchema,
     execute: async (input) => {
       executedCommands.push(input.command);
+      const stdout =
+        input.command === 'instructions'
+          ? 'Write the proposal.\n<output>openspec/changes/dark-mode-toggle/proposal.md</output>'
+          : `Mock output for: openspec ${input.command}`;
       const result: ToolResult = {
         success: true,
         command: `openspec ${input.command}`,
-        stdout: `Mock output for: openspec ${input.command}`,
+        stdout,
         stderr: '',
       };
       return JSON.stringify(result, null, 2);
@@ -111,8 +116,8 @@ test('T-5.2 propose precedes apply in console output', async (t) => {
   });
 
   // ── 2. Script the mock LLM (ai-powered AiClientLike) ─────────────────────
-  //   Call 0 → <tool_call> propose
-  //   Call 1 → <tool_call> apply
+  //   Call 0 → execute_openspec { command: "new", args: ["change", "dark-mode-toggle"] }
+  //   Call 1 → execute_openspec { command: "instructions", args: [...] }
   //   Call 2 → plain final answer (no tool_call)
   let callIndex = 0;
   const mockGenerate = t.mock.fn(async (
@@ -124,7 +129,7 @@ test('T-5.2 propose precedes apply in console output', async (t) => {
       return {
         content:
           '<tool_call>' +
-          '{"name":"execute_openspec","input":{"command":"propose","args":["dark-mode-toggle"]}}' +
+          '{"name":"execute_openspec","input":{"command":"new","args":["change","dark-mode-toggle"]}}' +
           '</tool_call>',
       };
     }
@@ -132,11 +137,11 @@ test('T-5.2 propose precedes apply in console output', async (t) => {
       return {
         content:
           '<tool_call>' +
-          '{"name":"execute_openspec","input":{"command":"apply","args":["dark-mode-toggle"]}}' +
+          '{"name":"execute_openspec","input":{"command":"instructions","args":["--change","dark-mode-toggle","proposal"]}}' +
           '</tool_call>',
       };
     }
-    return { content: 'Done. Proposed and applied dark-mode-toggle.' };
+    return { content: 'Done. Created change and fetched proposal instructions for dark-mode-toggle.' };
   });
 
   const mockClient: AiClientLike = {
@@ -161,28 +166,28 @@ test('T-5.2 propose precedes apply in console output', async (t) => {
 
   // ── 4. Assertions ──────────────────────────────────────────────────────
 
-  // LLM must have been called for: propose turn, apply turn, and end_turn.
+  // LLM must have been called for: new turn, instructions turn, and end_turn.
   assert.ok(
     mockGenerate.mock.calls.length >= 3,
     `LLM must be called ≥3 times, got ${mockGenerate.mock.calls.length}`,
   );
 
-  // propose and apply must both appear in the captured tool call list.
+  // `new` and `instructions` must both appear in the captured tool call list.
   assert.ok(
-    executedCommands.includes('propose'),
-    `"propose" must be in executed commands: ${executedCommands.join(', ')}`,
+    executedCommands.includes('new'),
+    `"new" must be in executed commands: ${executedCommands.join(', ')}`,
   );
   assert.ok(
-    executedCommands.includes('apply'),
-    `"apply" must be in executed commands: ${executedCommands.join(', ')}`,
+    executedCommands.includes('instructions'),
+    `"instructions" must be in executed commands: ${executedCommands.join(', ')}`,
   );
 
-  // propose must precede apply in the recorded execution order.
-  const proposePos = executedCommands.indexOf('propose');
-  const applyPos   = executedCommands.indexOf('apply');
+  // `new` must precede `instructions` in the recorded execution order.
+  const newPos          = executedCommands.indexOf('new');
+  const instructionsPos = executedCommands.indexOf('instructions');
   assert.ok(
-    proposePos < applyPos,
-    `"propose" (pos ${proposePos}) must precede "apply" (pos ${applyPos}) ` +
+    newPos < instructionsPos,
+    `"new" (pos ${newPos}) must precede "instructions" (pos ${instructionsPos}) ` +
     `in: [${executedCommands.join(', ')}]`,
   );
 

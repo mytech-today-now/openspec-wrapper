@@ -17,6 +17,8 @@
 import { z } from 'zod';
 import { getAiClient } from 'ai-powered';
 import { exec } from 'node:child_process';
+import { writeFile as fsWriteFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 /**
  * Runtime configuration resolved from environment variables at startup.
@@ -172,7 +174,7 @@ export async function checkOpenspecCLI(): Promise<void> {
  */
 export const ExecuteOpenspecSchema = z.object({
   /** OpenSpec subcommand — restricted to the approved whitelist. */
-  command: z.enum(['propose', 'apply', 'archive', 'status', 'list', 'init']),
+  command: z.enum(['new', 'instructions', 'archive', 'list', 'status', 'init', 'validate', 'show']),
   /** Positional arguments appended after the subcommand (e.g. change slug). */
   args: z.array(z.string()).optional(),
   /**
@@ -313,11 +315,64 @@ registry.set('execute_openspec', {
   description:
     'Execute an OpenSpec CLI subcommand. ' +
     'This is the ONLY mechanism for running openspec commands — never simulate output. ' +
-    'Subcommands: propose, apply, archive, status, list, init. ' +
+    'Subcommands: new (create a change), instructions (get per-artifact writing instructions), ' +
+    'archive, list, status, init, validate, show. ' +
     'Returns JSON: { success: boolean, command: string, stdout: string, stderr: string }.',
   schema: ExecuteOpenspecSchema,
   execute: (input) =>
     executeOpenspec(input, process.env['OPENSPEC_CWD'] ?? process.cwd()),
+});
+
+// ── write_file tool ───────────────────────────────────────────────────────
+
+/**
+ * Zod schema for the write_file tool input.
+ *
+ * Accepts an absolute path and UTF-8 string content.  The agent receives the
+ * target path from the <output> block of `openspec instructions` and must call
+ * this tool to materialise each artifact on disk — the openspec CLI does NOT
+ * write artifact content automatically.
+ */
+export const WriteFileSchema = z.object({
+  /** Absolute path to the file to create or overwrite. */
+  path: z.string(),
+  /** UTF-8 content to write to the file. */
+  content: z.string(),
+});
+
+/** TypeScript type inferred from WriteFileSchema. */
+export type WriteFileInput = z.infer<typeof WriteFileSchema>;
+
+/**
+ * Writes UTF-8 content to an absolute file path, creating parent directories
+ * as needed.  Returns a JSON-serialised result object.
+ *
+ * Used by the agent after calling `openspec instructions` to materialise each
+ * artifact (proposal.md, design.md, etc.) at the path shown in the <output>
+ * section of the instructions output.
+ */
+export async function writeFileTool(input: WriteFileInput): Promise<string> {
+  const { path: filePath, content } = input;
+  console.log(`🔧 Tool: write_file ${filePath}`);
+  try {
+    await mkdir(dirname(filePath), { recursive: true });
+    await fsWriteFile(filePath, content, 'utf8');
+    return JSON.stringify({ success: true, path: filePath, bytes: content.length });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return JSON.stringify({ success: false, path: filePath, error: msg });
+  }
+}
+
+registry.set('write_file', {
+  name: 'write_file',
+  description:
+    'Write UTF-8 content to a file on disk. Creates parent directories as needed. ' +
+    'Use this AFTER calling `openspec instructions` to write each artifact to the exact path ' +
+    'shown in the <output> block of the instructions. ' +
+    'Returns JSON: { success: boolean, path: string, bytes?: number, error?: string }.',
+  schema: WriteFileSchema,
+  execute: (input) => writeFileTool(input),
 });
 
 // ── bd-jhsv: dispatchTool ─────────────────────────────────────────────────
@@ -374,21 +429,31 @@ export async function dispatchTool(
  * Ref: design.md System Prompt Design, wrapper-JIRA.md §2c, SPEC-AGENT-001
  */
 export const SYSTEM_PROMPT = `\
-You are an OpenSpec AI Agent. Your sole purpose is to help engineers execute OpenSpec \
-workflows by calling the execute_openspec tool.
+You are an OpenSpec AI Agent. You help engineers create and manage OpenSpec change artifacts \
+by orchestrating the openspec CLI and writing files to disk.
 
-OpenSpec workflow (always in this order):
-  1. propose  — generate a specification file from a feature description
-  2. review   — present the generated proposal to the user for confirmation
-  3. apply    — scaffold code from the approved proposal
-  4. archive  — mark the proposal as complete after implementation
+OpenSpec workflow (always follow this order):
+  1. execute_openspec new change <slug> [--description "..."]
+       Creates the change directory and metadata.
+  2. For each artifact (proposal, design, deltas, tasks, etc.):
+     a. execute_openspec instructions --change <slug> <artifact>
+          Returns the writing instructions AND the exact output file path in an <output> block.
+     b. Generate the artifact content using the instructions as your guide.
+     c. write_file { path: "<exact path from <output> block>", content: "<generated content>" }
+          Writes the artifact to disk.
+  3. Repeat step 2 for every artifact the user requested.
+  4. execute_openspec archive --change <slug>
+       Marks the change as complete when all artifacts are written and verified.
+
+Tools:
+- execute_openspec — ONLY mechanism for running openspec CLI commands. Never simulate output.
+- write_file — ONLY mechanism for writing artifact content to disk.
 
 Rules:
-- Never skip a step. Always show the user the proposal output before calling apply.
-- Never simulate or fabricate CLI output. Use the execute_openspec tool exclusively.
-- If a command fails, report the exact stderr text and stop.
-- Ask for clarification before proceeding if the user's intent is ambiguous.
-- End each turn with a clear statement of what was done and what the next step is.
+- Never fabricate CLI output. Always use execute_openspec.
+- Always read the <output> path from the instructions result and use it exactly with write_file.
+- If a command fails, report stderr verbatim and stop.
+- End each turn with a clear statement of what was done and what comes next.
 `.trim();
 
 // ── bd-43cy: zodToJsonSchema + buildToolSchema ───────────────────────────
