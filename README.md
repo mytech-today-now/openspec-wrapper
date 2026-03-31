@@ -5,7 +5,7 @@
 > `propose → review → apply → archive` workflow autonomously.
 
 [![Version](https://img.shields.io/badge/version-0.2.1-blue)](CHANGELOG.md)
-[![npm](https://img.shields.io/badge/npm-GitHub%20Packages-orange)](https://github.com/mytech-today-now/openspec-wrapper/pkgs/npm/openspec-wrapper)
+[![npm](https://img.shields.io/npm/v/%40mytech-today-now%2Fopenspec-wrapper?label=npm)](https://www.npmjs.com/package/@mytech-today-now/openspec-wrapper)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520%20LTS-brightgreen)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-Private-lightgrey)](#license)
 
@@ -69,39 +69,17 @@ The agent will:
 
 ## Installation
 
-The package is published to **GitHub Packages** under the
-`@mytech-today-now` scope.
+The package is published publicly to **npmjs.com**.
 
-### Step 1 — Authenticate with GitHub Packages
-
-Add the following to your project's `.npmrc` (or your global `~/.npmrc`):
-
-```ini
-@mytech-today-now:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-`NODE_AUTH_TOKEN` must be a GitHub Personal Access Token (classic) with the
-**`read:packages`** scope.  Generate one at
-<https://github.com/settings/tokens/new>.
-
-Set it in your shell:
-
-```bash
-# bash / zsh
-export NODE_AUTH_TOKEN=ghp_your_token_here
-
-# PowerShell
-$env:NODE_AUTH_TOKEN = "ghp_your_token_here"
-```
-
-### Step 2 — Install the package
+### Step 1 — Install the package
 
 ```bash
 npm install @mytech-today-now/openspec-wrapper
 ```
 
-### Step 3 — Install the OpenSpec CLI
+No authentication or `.npmrc` changes are needed — it is a public package.
+
+### Step 2 — Install the OpenSpec CLI
 
 ```bash
 npm install -g openspec
@@ -327,8 +305,8 @@ npm run typecheck
 # 2. Commit and push
 git add . && git commit -m "chore(release): vX.Y.Z" && git push origin main
 
-# 3. Set your GitHub PAT with write:packages scope, then publish
-$env:NODE_AUTH_TOKEN = "ghp_your_token_here"   # PowerShell
+# 3. Log in to npmjs.com (one-time setup), then publish
+npm login
 npm publish
 ```
 
@@ -372,15 +350,6 @@ parses and dispatches.  This works with **any** LLM provider.
 npm uninstall @mytech-today-now/openspec-wrapper
 ```
 
-Then remove the registry entry from your project's `.npmrc` if no other
-`@mytech-today-now` packages are used:
-
-```ini
-# remove or comment out these lines in .npmrc
-# @mytech-today-now:registry=https://npm.pkg.github.com
-# //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
 ### Remove the OpenSpec CLI
 
 ```bash
@@ -396,11 +365,6 @@ Delete it manually when no longer needed:
 rm .env                          # macOS / Linux / Git Bash
 Remove-Item .env                 # PowerShell
 ```
-
-### Revoke your GitHub PAT
-
-If you created a token solely for this package, revoke it at
-<https://github.com/settings/tokens> to prevent unintended access.
 
 ---
 
@@ -475,5 +439,5 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 Private — all rights reserved.  See repository settings for access controls.
 
-Package registry: [GitHub Packages — @mytech-today-now/openspec-wrapper](https://github.com/mytech-today-now/openspec-wrapper/pkgs/npm/openspec-wrapper)
+Package registry: [npmjs.com — @mytech-today-now/openspec-wrapper](https://www.npmjs.com/package/@mytech-today-now/openspec-wrapper)
 

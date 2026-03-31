@@ -14,21 +14,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [0.2.1] — 2026-03-31
 
 ### Changed
+- **Registry migrated to public npmjs.com** — package is now published at
+  `https://registry.npmjs.org` with public access; no GitHub PAT or `.npmrc`
+  changes needed to install.
 - **README.md** restructured for npm consumers: `npm install` is now the
-  primary installation path; clone-the-repo instructions moved to the new
-  "Contributing / Local Development" section.
-- Installation section updated with step-by-step GitHub Packages auth
-  (`NODE_AUTH_TOKEN` + `.npmrc`) and install instructions.
-- Uninstall section updated: removed "delete the cloned repo" step; added
-  PAT revocation guidance and `.npmrc` cleanup instructions.
-- Added "Publishing a new version" workflow to the Contributing section.
-- Added npm badge pointing to the GitHub Packages registry page.
+  primary installation path (no auth required); clone-the-repo instructions
+  moved to the new "Contributing / Local Development" section.
+- Installation section simplified to two steps: `npm install` + `npm install -g openspec`.
+- Uninstall section simplified: removed `.npmrc` cleanup and PAT revocation
+  steps (no longer required for a public package).
+- Publishing workflow updated: `npm login` to npmjs instead of GitHub PAT.
+- Badge updated to the live npmjs version shield.
+- `publishConfig.registry` changed from `https://npm.pkg.github.com` to
+  `https://registry.npmjs.org`; `access` changed from `restricted` to `public`.
+- `.npmrc` updated to remove GitHub Packages auth lines.
 - Version bumped `0.2.0` → `0.2.1` across `package.json`, `VERSION`, and
   `README.md` badge.
 
 ### Added
-- First published release to GitHub Packages
-  (`https://npm.pkg.github.com/@mytech-today-now/openspec-wrapper`).
+- First public release to npmjs.com
+  (`https://www.npmjs.com/package/@mytech-today-now/openspec-wrapper`).
 
 ---
 

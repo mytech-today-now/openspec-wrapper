@@ -23,8 +23,8 @@
   "main": "./dist/open-spec-agent.js",
   "types": "./dist/open-spec-agent.d.ts",
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "restricted"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "repository": {
     "type": "git",
