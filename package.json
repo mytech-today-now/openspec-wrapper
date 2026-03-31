@@ -1,0 +1,27 @@
+{
+  "name": "openspec-wrapper",
+  "version": "0.1.0",
+  "description": "AI agent wrapper that drives the openspec CLI via natural language",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "ai-powered": "^0.1.0",
+    "zod": "^3.25.76"
+  },
+  "scripts": {
+    "openspec:agent": "node --env-file=.env --experimental-strip-types open-spec-agent.ts",
+    "openspec:agent:build": "tsc --outDir dist --declaration",
+    "openspec:agent:run": "node --env-file=.env dist/open-spec-agent.js",
+    "typecheck": "tsc --noEmit --strict",
+    "test": "node --experimental-strip-types --test open-spec-agent.test.ts"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}
