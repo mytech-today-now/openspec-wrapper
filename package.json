@@ -1,6 +1,6 @@
 {
   "name": "@mytechtoday/openspec-wrapper",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "AI agent wrapper that drives the openspec CLI via natural language",
   "type": "module",
   "engines": {

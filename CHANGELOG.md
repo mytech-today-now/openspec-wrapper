@@ -11,6 +11,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [0.2.7] — 2026-03-31
+
+### Fixed
+- **Decoupled nudge logic** — replaced single shared `nudgedLastTurn` boolean with
+  independent state variables: `nudgedForPlanning`, `stuckCount`, `archiveSucceeded`,
+  and `changeStarted`.  Previously any nudge (e.g. truncation recovery) silently
+  suppressed both the phantom-file check and the archive-completion check in the
+  very next iteration, allowing a hallucinated "All files written" response to be
+  accepted as the final answer after only 1–2 real artifacts were created.
+- **Truncation nudge no longer gates downstream checks** — token-limit detection
+  resets `nudgedForPlanning` and `stuckCount` (so it is not counted as a stuck turn)
+  but does not set any flag that blocks phantom or archive verification.
+- **Archive enforcement** — when `execute_openspec new` has succeeded and at least one
+  file has been written (`writtenFiles.size > 0`), the agent will not accept a final
+  answer until `execute_openspec archive` has also returned success.  Prevents the
+  model from claiming completion without closing the workflow.
+- **Stuck-turn counter** (`stuckCount`) gates phantom/archive nudges — allows up to 5
+  consecutive no-tool-call turns before accepting the response, enabling multiple
+  correction cycles without risking an infinite loop.
+- **TypeScript build fix** — `toolCall.input` typed as `unknown`; casted to
+  `Record<string, unknown>` before accessing `.command` to satisfy strict compilation.
+
+---
+
 ## [0.2.6] — 2026-03-31
 
 ### Fixed

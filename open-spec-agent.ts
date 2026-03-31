@@ -37,7 +37,7 @@ export interface AgentConfig {
   baseUrl?: string;
   /** Sampling temperature. Default: 0.2. */
   temperature: number;
-  /** Maximum ReAct iterations before the loop exits gracefully. Default: 10. */
+  /** Maximum ReAct iterations before the loop exits gracefully. Default: 30. */
   maxIterations: number;
   /** Working directory for openspec CLI invocations. Default: process.cwd(). */
   cwd: string;
@@ -91,7 +91,7 @@ export interface ToolResult {
  *   AI_API_KEY         — required unless AI_PROVIDER === "ollama"
  *   AI_BASE_URL        — optional
  *   AI_TEMPERATURE     — float, default: 0.2
- *   AI_MAX_ITERATIONS  — integer, default: 10
+ *   AI_MAX_ITERATIONS  — integer, default: 30
  *   OPENSPEC_CWD       — default: process.cwd()
  *   DEBUG              — boolean ("true"), default: false
  *
@@ -819,10 +819,18 @@ export async function runAgent(
 
   // ── ReAct loop ───────────────────────────────────────────────────────────
   let iterations = 0;
-  // nudgedLastTurn prevents infinite nudge cycles: we only inject the
-  // "call a tool now" correction once per planning response.  If the model
-  // still returns plain text after the nudge we treat it as the final answer.
-  let nudgedLastTurn = false;
+  // nudgedForPlanning: set true when a planning-narration nudge fires.
+  // Prevents re-nudging the same narration pattern back-to-back.
+  // Reset to false whenever a tool call is dispatched.
+  let nudgedForPlanning = false;
+  // stuckCount: counts consecutive turns that produced no tool call.
+  // Limits phantom/archive nudge cycles.  Reset to 0 on any tool call or truncation.
+  let stuckCount = 0;
+  // changeStarted: true once `execute_openspec new change <slug>` returns success.
+  let changeStarted = false;
+  // archiveSucceeded: true once `execute_openspec archive` returns success.
+  // Required before accepting a final answer when a change was started and files written.
+  let archiveSucceeded = false;
   // Tracks absolute paths of files successfully written via write_file during
   // this session.  Used by phantom-file validation to detect hallucinated
   // completion claims.
@@ -888,12 +896,15 @@ export async function runAgent(
     // When the model's response consumed all available tokens the output was
     // cut off before a <tool_call> block could be completed.  Inject a nudge
     // so the model continues from where it was cut rather than hallucinating.
+    // NOTE: This check is NOT gated by nudgedForPlanning — truncation can happen
+    // at any time and always needs to be handled regardless of prior nudge state.
     const completionTokens = result.usage?.completionTokens ?? 0;
-    if (!nudgedLastTurn && completionTokens > 0 && completionTokens >= callOptions.maxTokens! * 0.99) {
+    if (completionTokens > 0 && completionTokens >= callOptions.maxTokens! * 0.99) {
       console.warn(
         `⚠️  Response hit token limit (${completionTokens}/${callOptions.maxTokens}) — nudging to continue.`,
       );
-      nudgedLastTurn = true;
+      nudgedForPlanning = false; // allow fresh planning check after resuming
+      stuckCount = 0;            // truncation is not a "stuck" turn
       turns.push(
         'Human: Your previous response was cut off because it was too long. ' +
         'Call EXACTLY ONE tool now to continue the task — do not repeat or summarise previous work.',
@@ -905,11 +916,12 @@ export async function runAgent(
     const toolCall = parseToolCall(assistantText);
 
     if (toolCall !== null) {
-      // Model called a tool — reset nudge flag and dispatch.
+      // Model called a tool — reset per-turn nudge state and dispatch.
       // Note: individual tools (executeOpenspec, writeFileTool) log their own
       // 🔧 lines with the fully-assembled command/path, which is more useful
       // than repeating the bare tool name here.
-      nudgedLastTurn = false;
+      nudgedForPlanning = false;
+      stuckCount = 0;
       let resultContent: string;
 
       try {
@@ -925,6 +937,17 @@ export async function runAgent(
             }
           } catch { /* ignore parse errors — result may not be JSON */ }
         }
+
+        // Track whether `openspec new change <slug>` succeeded — marks workflow start.
+        // Track whether `openspec archive` succeeded — required before final answer.
+        if (toolCall.name === 'execute_openspec') {
+          const inp = toolCall.input as Record<string, unknown>;
+          try {
+            const parsed = JSON.parse(resultContent) as { success?: boolean };
+            if (parsed.success && inp.command === 'new') changeStarted = true;
+            if (parsed.success && inp.command === 'archive') archiveSucceeded = true;
+          } catch { /* ignore */ }
+        }
       } catch (err) {
         resultContent =
           `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -935,16 +958,22 @@ export async function runAgent(
       continue;
     }
 
-    // ── No tool call: check for planning narration (GPT-4o pattern) ──────
+    // ── No tool call — count this as a stuck turn ────────────────────────
+    stuckCount++;
+    // Maximum consecutive stuck turns before we stop nudging and accept the
+    // response as the genuine final answer (prevents infinite loops).
+    const MAX_STUCK = 5;
+
+    // ── Planning narration check (GPT-4o pattern) ─────────────────────────
     // When the model describes what it *plans* to do instead of calling a
-    // tool, inject a single correction turn.  nudgedLastTurn ensures we only
-    // do this once — if the model still narrates after the nudge we fall
-    // through to the final-answer path rather than looping indefinitely.
-    if (!nudgedLastTurn && looksLikePlanning(assistantText)) {
+    // tool, inject a single correction turn.  nudgedForPlanning ensures we
+    // only fire once per stuck run — if the model still narrates after the
+    // nudge we fall through so the other checks can still run.
+    if (!nudgedForPlanning && looksLikePlanning(assistantText)) {
       console.warn(
         '⚠️  Model narrated a plan instead of calling a tool — nudging it to act.',
       );
-      nudgedLastTurn = true;
+      nudgedForPlanning = true;
       turns.push(
         'Human: You described a plan but did not call any tool. ' +
         'You MUST output a <tool_call> block right now — do not explain, just call the tool.',
@@ -952,17 +981,18 @@ export async function runAgent(
       continue;
     }
 
-    // ── Phantom-file validation ───────────────────────────────────────────
-    // Before accepting a final answer, scan the response for file paths the
-    // model claims to have written.  If any of those paths do not exist on
-    // disk, the model hallucinated the completion — nudge it to write them.
-    if (!nudgedLastTurn) {
+    // ── Phantom-file validation & archive requirement ─────────────────────
+    // These checks run INDEPENDENTLY of the planning nudge flag so a prior
+    // nudge (e.g. truncation or planning) never silently suppresses them.
+    // They are gated only by stuckCount to prevent infinite loops.
+    if (stuckCount <= MAX_STUCK) {
+      // Scan the response for file paths the model claims to have written.
+      // If any are absent from disk, the model hallucinated the completion.
       const phantoms = extractPhantomPaths(assistantText, writtenFiles, config.cwd);
       if (phantoms.length > 0) {
         console.warn(
           `⚠️  Model claimed completion but ${phantoms.length} file(s) are missing — nudging.`,
         );
-        nudgedLastTurn = true;
         turns.push(
           'Human: You claimed the task is complete, but the following files were never written to disk:\n' +
           phantoms.map((p) => `  - ${p}`).join('\n') + '\n' +
@@ -970,9 +1000,25 @@ export async function runAgent(
         );
         continue;
       }
+
+      // ── Archive requirement ─────────────────────────────────────────────
+      // The OpenSpec workflow is only complete once `openspec archive` has
+      // returned success.  If a change was started and artifacts were written
+      // but archive has not been called, the model is claiming completion
+      // prematurely — nudge it to finish the workflow.
+      if (changeStarted && writtenFiles.size > 0 && !archiveSucceeded) {
+        console.warn(
+          '⚠️  Workflow incomplete — `openspec archive` has not been called. Nudging.',
+        );
+        turns.push(
+          'Human: You have not yet called `openspec archive`. ' +
+          'The OpenSpec workflow is not complete until archive succeeds. Call it now.',
+        );
+        continue;
+      }
     }
 
-    // ── No tool call and not planning → genuine final answer ─────────────
+    // ── No tool call, all checks passed → genuine final answer ───────────
     console.log('\n✅ Agent response:\n');
     console.log(assistantText);
     return;
