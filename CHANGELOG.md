@@ -11,6 +11,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [0.2.2] — 2026-03-31
+
+### Fixed
+- **Missing `bin` field** — `open-spec-agent` is now exposed as a CLI binary in
+  `package.json`'s `bin` field, pointing to `dist/open-spec-agent.js`.  When
+  `@mytechtoday/openspec-wrapper` is installed as a dependency in another repo,
+  npm links `openspec-agent` into that project's `node_modules/.bin/` so it can
+  be invoked via `npx openspec-agent` or referenced in the host project's npm
+  scripts as `"openspec:agent": "openspec-agent"`.  Previously, the agent scripts
+  existed only in `openspec-wrapper`'s own `package.json` and were inaccessible
+  to consuming projects.
+
+### Added
+- **Shebang line** (`#!/usr/bin/env node`) added as the first line of
+  `open-spec-agent.ts`; TypeScript preserves it in the compiled `dist/open-spec-agent.js`
+  output, making the binary directly executable on macOS, Linux, and WSL.
+
+---
+
 ## [0.2.1] — 2026-03-31
 
 ### Changed

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // open-spec-agent.ts
 // OpenSpec AI Agent Wrapper — single-file TypeScript agent.
 // Ticket: FEAT-1423
